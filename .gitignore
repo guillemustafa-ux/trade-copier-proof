@@ -1,0 +1,7 @@
+node_modules/
+.env
+.env.*
+# embedded Postgres data dirs live in the OS temp dir; these guard against a misconfigured run
+data/
+pgdata/
+*.log

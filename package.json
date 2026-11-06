@@ -1,0 +1,31 @@
+{
+  "name": "trade-copier-proof",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "demo": "tsx src/demo-cli.ts",
+    "capacity": "tsx src/capacity-cli.ts",
+    "dashboard": "tsx src/dashboard-cli.ts",
+    "footgun": "node scripts/footgun.mjs"
+  },
+  "dependencies": {
+    "embedded-postgres": "16.15.0-beta.19",
+    "pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
