@@ -164,7 +164,7 @@ docs do not rule out.
 | Changes | Does not change |
 | --- | --- |
 | No desktop platform sits in the copy path: fills arrive on a socket, placements go over REST | The API limits. They are per `/24` and per user, wherever the process runs |
-| State outlives the process: kill it anywhere and it resumes (f) | A lost response is still ambiguous, and `clOrdId` is still not enforced, so [the hole](#the-honest-hole) remains |
+| State outlives the process: killed at any of the four tested checkpoints, it resumes (f) | A lost response is still ambiguous, and `clOrdId` is still not enforced, so [the hole](#the-honest-hole) remains |
 | Egress addresses become a design choice, which is what the limits turn on | Cloud addresses can be shared: "you may share limits with them" if another client sends from your `/24` |
 | It can be watched from a browser (a read-only dashboard here) and stopped by a kill switch | Two sessions per user. With a third, "the oldest sessions are closed", so the trader's own logins can evict the copier. The docs: "Your API user should be a dedicated user" |
 | It can run with the desktop off | Prop firm rules |
