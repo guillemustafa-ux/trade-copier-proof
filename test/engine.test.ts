@@ -507,7 +507,7 @@ describe('rejection, closeout, kill switch', () => {
     expect(r.sim.count('order/placeorder')).toBe(4);
     expect(r.sim.positionOf(A)).toBe(1);
 
-    // A reduction never crosses zero while the switch is on: it would open the other side.
+    // This reduction is cut at flat while the switch is on: past it, it would open the other side.
     r.sim.masterTrade({ action: 'Sell', fills: [4] });
     await r.engine.runUntilIdle();
     expect(r.sim.positionOf(A)).toBe(0);
