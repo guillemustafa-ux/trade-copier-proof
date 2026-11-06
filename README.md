@@ -234,13 +234,13 @@ fail and every other test stays green. The mapping below is what was measured on
 
 | Footgun | The mistake | Tests that fail |
 | --- | --- | --- |
-| `blind-retry-on-timeout` | An ambiguous send is re-sent at once, with no lookup | (c) all four, (d) both, (o) lost close, (q) engine |
+| `blind-retry-on-timeout` | An ambiguous send is re-sent at once, with no lookup | (c) all four, (d) both, (o) lost close, (p) unresolved order, (p) no answer: all three, (q) engine |
 | `treat-200-as-placed` | Any 200 counts as a placed order | (g), (h), (n), (q) engine, (t) |
 | `intent-after-send` | SENDING is committed after the network call | (f) `after_send_before_ack`, (f) `after_ack_before_commit` |
-| `no-grace-window` | One empty lookup is enough to re-send | (c) inside the window, (d) first case, (q) engine |
+| `no-grace-window` | One empty lookup is enough to re-send | (c) inside the window, (d) first case, (p) unresolved order, (q) engine |
 | `ignore-captcha` | `p-captcha` is read as an ordinary penalty | (h) |
 | `feed-no-dedupe` | A repeated fill is ingested again | (b), (m) first case |
-| `close-from-belief` | `closeout` sizes from its own intents | (e) both, (o) pre-existing position, (q) engine |
+| `close-from-belief` | `closeout` sizes from its own intents | (e) both, (o) pre-existing position, (p) close and reduction in one batch, (p) 429 with a close in the batch, (p) no answer, visible late, (q) engine |
 
 Two results worth reading. `feed-no-dedupe` does not produce a second order: the unique key on
 `(master_fill_id, follower_account_id)` still stops it, and what breaks is the master position, counted

@@ -9,6 +9,10 @@
       "(d) response lost before accept",
       "(d) a re-send that is also lost",
       "(o) a closeout whose response is lost",
+      "(p) a reduction on a pair with an unresolved order",
+      "(p) switch on, a reduction with no answer and absent after the grace window (never accepted)",
+      "(p) switch on, a reduction with no answer and absent after the grace window (accepted, visible only after the grace window)",
+      "(p) switch on, a close with no answer and absent after the grace window",
       "(q) the engine under the same seed"
     ]
   },
@@ -34,6 +38,7 @@
     "expectedFailures": [
       "(c) response lost after accept, order visible only inside the grace window",
       "(d) response lost before accept",
+      "(p) a reduction on a pair with an unresolved order",
       "(q) the engine under the same seed"
     ]
   },
@@ -54,6 +59,9 @@
       "(e) order appears after the grace window",
       "(e) auto-close is explicit config",
       "(o) a pre-existing duplicate position",
+      "(p) a close and a reduction in one batch",
+      "(p) the read answers 429 with a close in the batch",
+      "(p) switch on, a reduction with no answer and absent after the grace window (accepted, visible only after the grace window)",
       "(q) the engine under the same seed"
     ]
   }
