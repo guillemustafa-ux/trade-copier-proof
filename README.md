@@ -50,9 +50,9 @@ OS temp dir and remove it afterwards. Either way they work in a database they cr
 ## What the demo measured
 
 `npm run demo`, seed 42: 1,000 accounts across 50 logins plus one master, the same scenario and fault
-plan against both copiers. Every number is read from the simulator's records, and the file is
-byte-identical for the same seed (test (r)). This table is
-[`COPY_REPORT.md`](COPY_REPORT.md):
+plan against both copiers. Every number is read from the simulator's records. The report is
+byte-identical for the same seed: test (r) pins that at 200 accounts, and this 1,000-account report
+was compared by running it twice. This table is [`COPY_REPORT.md`](COPY_REPORT.md):
 
 | Measured | Naive copier | Engine |
 | --- | --- | --- |
@@ -60,7 +60,9 @@ byte-identical for the same seed (test (r)). This table is
 | Orders per account, min / avg / max | 0 / 8.94 / 11 | 0 / 4.51 / 6 |
 | Duplicated orders (same clOrdId placed twice) | 4493 | 3 |
 | ... retried at once | 43 | 0 |
-| ... placed later (a replay, or a re-send after the grace window) | 4450 | 3 |
+| ... repeated master frame | 1789 | 0 |
+| ... replay after reconnect | 2661 | 0 |
+| ... re-send after the grace window | 0 | 3 |
 | Accounts with a wrong position at end of scenario | 965 | 52 |
 | Contracts of wrong position | 8637 | 102 |
 | Accounts with a missed copy (no order at all) | 78 | 44 |
@@ -73,19 +75,22 @@ byte-identical for the same seed (test (r)). This table is
 How to read the engine's column, because it is not all zeros and should not be:
 
 - **3 duplicates.** The plan makes 3 orders visible only after the grace window. The engine re-sent
-  them, the reconciler flagged all 3. See [the honest hole](#the-honest-hole).
+  them. All 3 positions drifted, so the reconciler flagged all 3: it looks for duplicates only on
+  accounts that drifted. See [the honest hole](#the-honest-hole).
 - **52 wrong positions and 44 missed copies.** 34 of each are on the two logins the plan stops (one
   `p-captcha`, one `429`): the engine sends nothing there and raises an alert, so those accounts fall
-  behind on purpose. 10 of each are accounts the server rejected. The other 8 wrong positions are the
-  5 partial follower fills and the 3 duplicates above. The report measures this split.
+  behind on purpose. 10 of each are accounts the server rejected. The other 8 wrong positions are 5
+  partial follower fills and the 3 duplicates above. The report measures this split.
 - **10 residual contracts, 5 accounts.** All 10 are on the two stopped logins. A person decides what
   happens there.
 
-The naive copier's 4,450 late duplicates come mostly from one thing: after the feed stall it replays
-recent fills to every account. **It is a deliberately simple model of a failure class** (in-memory
-state, retry on timeout, replay after a reconnect, close orders sized from what it believes it sent),
-in [`naive/copier.ts`](naive/copier.ts). It is not anyone's real copier, and this repo makes no claim
-about why any real copier duplicates orders.
+Almost all of the naive copier's 4,493 duplicates come from two modeled behaviours with no dedupe
+behind them: 2,661 from replaying recent fills to every account after the reconnect, and 1,789 from
+copying a repeated master frame. Only 43 are retries at once. So the gap says what those two
+behaviours cost on this scenario, not how often a real copier does them. **It is a deliberately
+simple model of a failure class** (in-memory state, retry on timeout, replay after a reconnect, close
+orders sized from what it believes it sent), in [`naive/copier.ts`](naive/copier.ts). It is not
+anyone's real copier, and this repo makes no claim about why any real copier duplicates orders.
 
 Latency is simulated: virtual time from master fill to order acceptance, made of pacing, penalties,
 grace windows, feed stalls and a fixed 20-99 ms per order. No network was measured.

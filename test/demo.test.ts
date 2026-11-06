@@ -9,7 +9,9 @@ test('(q) the naive copier under the seeded chaos shows duplicates and residual 
     ordersPlaced: 8938,
     duplicatedOrders: 4493,
     duplicatesImmediate: 43,
-    duplicatesLater: 4450,
+    duplicatesRepeatedFrame: 1789,
+    duplicatesReplay: 2661,
+    duplicatesResend: 0,
     wrongPositionAccounts: 965,
     wrongPositionContracts: 8637,
     missedCopies: 78,
@@ -27,14 +29,16 @@ test('(q) the engine under the same seed: 3 duplicates, all flagged, and what it
     ordersPlaced: 4506,
     duplicatedOrders: 3,
     duplicatesImmediate: 0,
-    duplicatesLater: 3,
+    duplicatesRepeatedFrame: 0,
+    duplicatesReplay: 0,
+    duplicatesResend: 3,
     flaggedDuplicates: 3,
     wrongPositionAccounts: 52,
     missedCopies: 44,
     residualAccounts: 5,
     residualContracts: 10,
     residualOnStoppedLogins: 10,
-    wrongBreakdown: { stoppedLogins: 34, rejected: 10, other: 8 },
+    wrongBreakdown: { stoppedLogins: 34, rejected: 10, partialFills: 5, duplicates: 3, other: 0 },
     missedBreakdown: { stoppedLogins: 34, rejected: 10, other: 0 },
     stoppedLogins: ['login-03', 'login-04'],
     blockedIntents: 34,
@@ -63,5 +67,9 @@ test('(r) demo: the report is byte-identical for the same seed and differs for a
   const other = await run(7);
   expect(other.report).not.toBe(first.report);
   expect(first.report).toContain('| Duplicated orders (same clOrdId placed twice) |');
+  expect(first.report).toContain('| ... repeated master frame |');
+  expect(first.report).toContain('| ... replay after reconnect |');
+  expect(first.report).toContain('| ... re-send after the grace window |');
+  expect(first.report).toContain('so a duplicate masked by a later rejection is not flagged');
   expect(first.report).toContain('Latency is simulated');
 });

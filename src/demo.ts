@@ -29,8 +29,12 @@ export interface CopierNumbers {
   duplicatedOrders: number;
   /** Second placements in the same virtual second as the first: an immediate retry. */
   duplicatesImmediate: number;
-  /** Second placements later than that: a replay, or a re-send after the grace window. */
-  duplicatesLater: number;
+  /** Later, inside the grace window, no reconnect between the two: one master frame copied twice. */
+  duplicatesRepeatedFrame: number;
+  /** Later, with a feed reconnect between the two. */
+  duplicatesReplay: number;
+  /** Later, past the grace window, no reconnect between the two. */
+  duplicatesResend: number;
   wrongPositionAccounts: number;
   wrongPositionContracts: number;
   missedCopies: number;
@@ -45,7 +49,7 @@ export interface DemoResult {
   options: { seed: number; logins: number; accounts: number };
   faults: Record<string, number>;
   naive: CopierNumbers;
-  engine: CopierNumbers & { stoppedLogins: string[]; residualOnStoppedLogins: number; wrongBreakdown: { stoppedLogins: number; rejected: number; other: number }; missedBreakdown: { stoppedLogins: number; rejected: number; other: number }; blockedIntents: number; rejectedIntents: number; unknownIntents: number; flaggedDuplicates: number; alerts: Record<string, number> };
+  engine: CopierNumbers & { stoppedLogins: string[]; residualOnStoppedLogins: number; wrongBreakdown: { stoppedLogins: number; rejected: number; partialFills: number; duplicates: number; other: number }; missedBreakdown: { stoppedLogins: number; rejected: number; other: number }; blockedIntents: number; rejectedIntents: number; unknownIntents: number; flaggedDuplicates: number; alerts: Record<string, number> };
   report: string;
 }
 
@@ -140,14 +144,19 @@ async function playScenario(sim: Simulator, clock: VirtualClock, copier: { runUn
 /** Reads the outcome from the simulator, the only side that knows what really happened. */
 function measure(name: string, sim: Simulator, book: Book, closedBefore: Map<number, number>, closedAfter: Map<number, number>, prefix: RegExp, fillTimes: Map<number, number>): CopierNumbers {
   const copies = sim.orders.filter((o) => o.clOrdId && prefix.test(o.clOrdId));
+  const syncs = sim.requests.filter((q) => q.endpoint === 'user/syncrequest').map((q) => q.at);
   const firstPlaced = new Map<string, number>();
   let duplicatesImmediate = 0;
-  let duplicatesLater = 0;
+  let duplicatesRepeatedFrame = 0;
+  let duplicatesReplay = 0;
+  let duplicatesResend = 0;
   for (const o of copies) {
     const first = firstPlaced.get(o.clOrdId!);
     if (first === undefined) firstPlaced.set(o.clOrdId!, o.arrivedAt);
     else if (o.arrivedAt - first < 1_000) duplicatesImmediate++;
-    else duplicatesLater++;
+    else if (syncs.some((at) => at > first && at <= o.arrivedAt)) duplicatesReplay++;
+    else if (o.arrivedAt - first < GRACE_MS) duplicatesRepeatedFrame++;
+    else duplicatesResend++;
   }
   const perAccount = book.accounts.map((a) => copies.filter((o) => o.accountId === a.id).length);
   let wrongAccounts = 0;
@@ -176,9 +185,11 @@ function measure(name: string, sim: Simulator, book: Book, closedBefore: Map<num
     ordersPerAccountMin: Math.min(...perAccount),
     ordersPerAccountMax: Math.max(...perAccount),
     ordersPerAccountAvg: copies.length / book.accounts.length,
-    duplicatedOrders: duplicatesImmediate + duplicatesLater,
+    duplicatedOrders: duplicatesImmediate + duplicatesRepeatedFrame + duplicatesReplay + duplicatesResend,
     duplicatesImmediate,
-    duplicatesLater,
+    duplicatesRepeatedFrame,
+    duplicatesReplay,
+    duplicatesResend,
     wrongPositionAccounts: wrongAccounts,
     wrongPositionContracts: wrongContracts,
     missedCopies: missed,
@@ -240,10 +251,17 @@ export async function runEngine(options: { seed: number; logins: number; account
     const residualOnStoppedLogins = book.accounts.filter((a) => stopped.includes(a.login)).reduce((sum, a) => sum + Math.abs(after.get(a.id) ?? 0), 0);
     const rejected = new Set((await engine.intents({})).filter((i) => i.state === 'REJECTED').map((i) => Number(i.follower_account_id)));
     const cause = (a: { id: number; login: string }) => (stopped.includes(a.login) ? 'stoppedLogins' : rejected.has(a.id) ? 'rejected' : 'other');
-    const wrongBreakdown = { stoppedLogins: 0, rejected: 0, other: 0 };
+    const copies = sim.orders.filter((o) => o.clOrdId?.startsWith('tc-'));
+    const partial = new Set(copies.filter((o) => o.filled < o.qty).map((o) => o.accountId));
+    const duplicated = new Set(copies.filter((o, i) => copies.findIndex((c) => c.clOrdId === o.clOrdId) !== i).map((o) => o.accountId));
+    const wrongCause = (a: { id: number; login: string }) => {
+      const known = cause(a);
+      return known !== 'other' ? known : duplicated.has(a.id) ? 'duplicates' : partial.has(a.id) ? 'partialFills' : 'other';
+    };
+    const wrongBreakdown = { stoppedLogins: 0, rejected: 0, partialFills: 0, duplicates: 0, other: 0 };
     const missedBreakdown = { stoppedLogins: 0, rejected: 0, other: 0 };
     for (const a of book.accounts) {
-      if ((before.get(a.id) ?? 0) !== demoExpected(a.id)) wrongBreakdown[cause(a)]++;
+      if ((before.get(a.id) ?? 0) !== demoExpected(a.id)) wrongBreakdown[wrongCause(a)]++;
       if (demoSizing(a.id).enabled && !sim.ordersOf(a.id).some((o) => o.clOrdId?.startsWith('tc-'))) missedBreakdown[cause(a)]++;
     }
     const alerts: Record<string, number> = {};
@@ -306,7 +324,9 @@ export function renderReport(r: Omit<DemoResult, 'report'>): string {
     row('Orders per account, min / avg / max', (c) => `${c.ordersPerAccountMin} / ${c.ordersPerAccountAvg.toFixed(2)} / ${c.ordersPerAccountMax}`),
     row('Duplicated orders (same clOrdId placed twice)', (c) => c.duplicatedOrders),
     row('... retried at once', (c) => c.duplicatesImmediate),
-    row('... placed later (a replay, or a re-send after the grace window)', (c) => c.duplicatesLater),
+    row('... repeated master frame', (c) => c.duplicatesRepeatedFrame),
+    row('... replay after reconnect', (c) => c.duplicatesReplay),
+    row('... re-send after the grace window', (c) => c.duplicatesResend),
     row('Accounts with a wrong position at end of scenario', (c) => c.wrongPositionAccounts),
     row('Contracts of wrong position', (c) => c.wrongPositionContracts),
     row('Accounts with a missed copy (no order at all)', (c) => c.missedCopies),
@@ -322,9 +342,9 @@ export function renderReport(r: Omit<DemoResult, 'report'>): string {
     '',
     `- Logins stopped and alerted, nothing sent on them afterwards: ${r.engine.stoppedLogins.length ? r.engine.stoppedLogins.join(', ') : 'none'}.`,
     `- Intents BLOCKED ${r.engine.blockedIntents}, REJECTED ${r.engine.rejectedIntents}, still UNKNOWN ${r.engine.unknownIntents}, at the end of the scenario.`,
-    `- Wrong positions by cause: ${r.engine.wrongBreakdown.stoppedLogins} on logins it stopped, ${r.engine.wrongBreakdown.rejected} on accounts the server rejected, ${r.engine.wrongBreakdown.other} others (partial follower fills and the duplicates below).`,
+    `- Wrong positions by cause: ${r.engine.wrongBreakdown.stoppedLogins} on logins it stopped, ${r.engine.wrongBreakdown.rejected} on accounts the server rejected, ${r.engine.wrongBreakdown.partialFills} with a partial follower fill, ${r.engine.wrongBreakdown.duplicates} with a duplicate, ${r.engine.wrongBreakdown.other} others.`,
     `- Missed copies by cause: ${r.engine.missedBreakdown.stoppedLogins} on logins it stopped, ${r.engine.missedBreakdown.rejected} on accounts the server rejected, ${r.engine.missedBreakdown.other} others.`,
-    `- Duplicated clOrdIds flagged by the reconciler: ${r.engine.flaggedDuplicates}. These are the orders visible after the grace window, the limit the README states: the engine cannot see them in time, and a re-send follows.`,
+    `- Duplicated clOrdIds flagged by the reconciler: ${r.engine.flaggedDuplicates}. These are the orders visible after the grace window, the limit the README states: the engine cannot see them in time, and a re-send follows. It looks for them only on accounts whose position drifted, so a duplicate masked by a later rejection is not flagged.`,
     `- Alerts: ${Object.entries(r.engine.alerts).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k} ${v}`).join(', ') || 'none'}.`,
     `- Residual contracts on logins it stopped: ${r.engine.residualOnStoppedLogins} of ${r.engine.residualContracts}. It sends nothing there and says so; a person decides what happens next.`,
     '',

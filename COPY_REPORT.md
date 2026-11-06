@@ -8,7 +8,9 @@ Seed 42, 1000 simulated accounts across 50 logins plus one master. The same scen
 | Orders per account, min / avg / max | 0 / 8.94 / 11 | 0 / 4.51 / 6 |
 | Duplicated orders (same clOrdId placed twice) | 4493 | 3 |
 | ... retried at once | 43 | 0 |
-| ... placed later (a replay, or a re-send after the grace window) | 4450 | 3 |
+| ... repeated master frame | 1789 | 0 |
+| ... replay after reconnect | 2661 | 0 |
+| ... re-send after the grace window | 0 | 3 |
 | Accounts with a wrong position at end of scenario | 965 | 52 |
 | Contracts of wrong position | 8637 | 102 |
 | Accounts with a missed copy (no order at all) | 78 | 44 |
@@ -24,9 +26,9 @@ Latency is simulated: virtual time from master fill to order acceptance, made of
 
 - Logins stopped and alerted, nothing sent on them afterwards: login-03, login-04.
 - Intents BLOCKED 34, REJECTED 50, still UNKNOWN 0, at the end of the scenario.
-- Wrong positions by cause: 34 on logins it stopped, 10 on accounts the server rejected, 8 others (partial follower fills and the duplicates below).
+- Wrong positions by cause: 34 on logins it stopped, 10 on accounts the server rejected, 5 with a partial follower fill, 3 with a duplicate, 0 others.
 - Missed copies by cause: 34 on logins it stopped, 10 on accounts the server rejected, 0 others.
-- Duplicated clOrdIds flagged by the reconciler: 3. These are the orders visible after the grace window, the limit the README states: the engine cannot see them in time, and a re-send follows.
+- Duplicated clOrdIds flagged by the reconciler: 3. These are the orders visible after the grace window, the limit the README states: the engine cannot see them in time, and a re-send follows. It looks for them only on accounts whose position drifted, so a duplicate masked by a later rejection is not flagged.
 - Alerts: http_429 1, order_rejected 50, p_captcha 1, session_lost 2.
 - Residual contracts on logins it stopped: 10 of 10. It sends nothing there and says so; a person decides what happens next.
 
