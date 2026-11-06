@@ -273,9 +273,10 @@ without a crash, that ordering bug is invisible.
   they are simulator values. A deployment would need a secret store and encryption at rest.
 - **The dashboard has no authentication.** It is read-only and listens on 127.0.0.1, as a local demo.
 - **Results hold for these scenarios.** A finite fault plan on one machine shows what it shows.
-- **The CI workflow has not run yet.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) is
-  included for Ubuntu (`postgres:16`), Windows (PostgreSQL 17) and every footgun; everything quoted
-  here was run locally on Windows 11 with embedded PostgreSQL 16.
+- **CI covers the suite and the footguns, not the numbers above.**
+  [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the suite on Ubuntu (`postgres:16`) and
+  Windows (PostgreSQL 17), and every footgun; all 9 jobs passed on commit `0c40fc4`. The numbers quoted
+  here came from local runs on Windows 11 with embedded PostgreSQL 16.
 
 ## Layout
 
