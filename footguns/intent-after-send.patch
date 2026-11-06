@@ -4,7 +4,7 @@ index 0756d1d..f408425 100644
 +++ b/src/engine.ts
 @@ -284,8 +284,8 @@ export class Engine {
      const ticket = planned.find((r) => r.p_ticket);
-     const sending = ticket ? [ticket] : [...resend, ...planned];
+     const sending = await this.boundByPosition(login, ticket ? [ticket] : [...resend, ...planned], now);
      if (sending.length) {
 -      await this.store.markSending(sending.map((r) => r.id));
        const results = await Promise.all(sending.map(async (row) => ({ row, outcome: await this.send(row, token) })));

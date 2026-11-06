@@ -240,7 +240,7 @@ export class Engine {
         let state = 'PLANNED';
         let detail: string | null = null;
         if (killed) {
-          // Only what moves the follower's own position toward flat is allowed, and never past it.
+          // Only what moves the follower toward flat is planned. This is belief: the send is bounded by the real position.
           const held = believed.get(Number(account.id)) ?? 0;
           const allowed = held !== 0 && Math.sign(held) !== Math.sign(delta) ? Math.min(qty, Math.abs(held)) : 0;
           if (allowed === 0) {
@@ -282,7 +282,7 @@ export class Engine {
     // A ticket holder goes alone: anything else on this login would only add to its penalty.
     const planned = rows.filter((r) => r.state === 'PLANNED');
     const ticket = planned.find((r) => r.p_ticket);
-    const sending = ticket ? [ticket] : [...resend, ...planned];
+    const sending = await this.boundByPosition(login, ticket ? [ticket] : [...resend, ...planned], now);
     if (sending.length) {
       await this.store.markSending(sending.map((r) => r.id));
       const results = await Promise.all(sending.map(async (row) => ({ row, outcome: await this.send(row, token) })));
@@ -290,6 +290,41 @@ export class Engine {
       this.maybeCrash('mid_fanout', results.length);
     }
     await this.store.setNotBefore(login, now + this.minBatchIntervalMs);
+  }
+
+  /**
+   * With the kill switch on, a copy may only move the position the server reports toward flat, never
+   * past it: after a partial fill the engine believes it holds more than it does. If that position
+   * cannot be read, nothing goes out. With the switch off this returns the rows untouched.
+   */
+  private async boundByPosition(login: string, rows: IntentRow[], now: number): Promise<IntentRow[]> {
+    const copies = rows.filter((r) => r.kind === 'COPY');
+    if (!copies.length || (await this.store.setting('kill_switch')) !== 'on') return rows;
+    const held = await this.readPositions(login);
+    if (!held) {
+      await this.store.pool.query(`update intents set state = 'BLOCKED', due_at = null, detail = 'kill_switch_position_unread' where id = any($1::bigint[])`, [copies.map((r) => r.id)]);
+      await this.store.alert(now, login, 'kill_switch_position_unread', `${copies.length} reductions blocked: position/list could not be read`);
+      return rows.filter((r) => r.kind !== 'COPY');
+    }
+    const going: IntentRow[] = [];
+    for (const row of rows) {
+      if (row.kind !== 'COPY') {
+        going.push(row);
+        continue;
+      }
+      const key = `${row.follower_account_id}:${row.contract_id}`;
+      const actual = held.get(key) ?? 0;
+      const sign = row.action === 'Buy' ? 1 : -1;
+      const allowed = Math.sign(actual) === -sign ? Math.min(row.qty, Math.abs(actual)) : 0;
+      if (allowed === 0) {
+        await this.store.pool.query(`update intents set state = 'BLOCKED', due_at = null, detail = 'kill_switch' where id = $1`, [row.id]);
+        continue;
+      }
+      if (allowed < row.qty) await this.store.pool.query(`update intents set qty = $2, detail = $3 where id = $1`, [row.id, allowed, `kill_switch: cut from ${row.qty} to the position held`]);
+      held.set(key, actual + sign * allowed);
+      going.push({ ...row, qty: allowed });
+    }
+    return going;
   }
 
   private async send(row: IntentRow, token: string): Promise<PlaceOutcome> {
@@ -540,7 +575,7 @@ export class Engine {
     return results.sort((a, b) => a.accountId - b.accountId);
   }
 
-  /** On: entries stop, including those waiting to be sent. Closes and reductions still go out. */
+  /** On: entries stop, including those waiting to be sent. Closes go out; reductions go out bounded by the real position. */
   async setKillSwitch(on: boolean): Promise<void> {
     const now = this.clock.now();
     await this.store.tx(async (c) => {

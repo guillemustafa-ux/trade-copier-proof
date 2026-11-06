@@ -183,6 +183,27 @@ describe('ambiguous outcomes', () => {
     expect(r.sim.positionOf(B)).toBe(1);
     expect((await r.engine.reconcile()).rows).toEqual([]);
   });
+
+  test('(e) a duplicate masked by a later rejection: the position looks right, so the reconciler does not flag it', async () => {
+    const r = await setup({
+      accounts: 2,
+      plan: [
+        { accountId: A, nth: 1, fault: { kind: 'lostAfterAccept', visibleAfterMs: GRACE_MS + 30_000 } },
+        { accountId: A, nth: 3, fault: { kind: 'reject', reason: 'TradingLocked' } },
+      ],
+    });
+    const [fillId] = r.sim.masterTrade({ action: 'Buy', fills: [1] });
+    await r.engine.runUntilIdle();
+    await r.engine.runFor(GRACE_MS + 30_000);
+    expect(r.sim.ordersOf(A).map((o) => o.clOrdId)).toEqual([`tc-${fillId}-${A}`, `tc-${fillId}-${A}`]); // the duplicate is real
+
+    r.sim.masterTrade({ action: 'Buy', fills: [1] });
+    await r.engine.runUntilIdle();
+
+    expect(r.sim.positionOf(A)).toBe(2);
+    expect(r.sim.positionOf(B)).toBe(2);
+    expect((await r.engine.reconcile()).rows).toEqual([]);
+  });
 });
 
 describe('restart', () => {
@@ -369,6 +390,21 @@ describe('sizing and feed gaps', () => {
     expect((await r.engine.reconcile()).rows).toMatchObject([{ accountId: A, expected: 3, actual: 1, drift: -2 }]);
   });
 
+  test('(l) switch off, after a partial fill: a reduction sized from the master crosses zero and the reconciler flags it', async () => {
+    const r = await setup({ accounts: 2, plan: [{ accountId: A, nth: 1, fault: { kind: 'partialFill', filled: 1 } }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [3] });
+    await r.engine.runUntilIdle();
+    expect(r.sim.positionOf(A)).toBe(1);
+
+    r.sim.masterTrade({ action: 'Sell', fills: [3] });
+    await r.engine.runUntilIdle();
+
+    expect(r.sim.ordersOf(A).at(-1)).toMatchObject({ action: 'Sell', qty: 3 });
+    expect(r.sim.positionOf(A)).toBe(-2);
+    expect(r.sim.positionOf(B)).toBe(0);
+    expect((await r.engine.reconcile()).rows).toMatchObject([{ accountId: A, expected: 0, actual: -2, drift: -2 }]);
+  });
+
   test('(m) master feed stall and reconnect: fills missed during the gap are copied once', async () => {
     const r = await setup({ accounts: 3 });
     r.sim.masterTrade({ action: 'Buy', fills: [1] });
@@ -509,5 +545,79 @@ describe('rejection, closeout, kill switch', () => {
 
     expect(await r.engine.closeout(A)).toMatchObject({ sent: true, qty: 2, action: 'Sell' });
     expect(r.sim.positionOf(A)).toBe(0);
+  });
+
+  test('(p) switch on after a partial fill: the reduction is cut to the real position and stops at flat; a full fill is not cut', async () => {
+    const r = await setup({ accounts: 2, plan: [{ accountId: A, nth: 1, fault: { kind: 'partialFill', filled: 1 } }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [3] });
+    await r.engine.runUntilIdle();
+    expect(r.sim.positionOf(A)).toBe(1); // the engine believes 3
+    expect(r.sim.positionOf(B)).toBe(3);
+
+    await r.engine.setKillSwitch(true);
+    const [sell] = r.sim.masterTrade({ action: 'Sell', fills: [3] });
+    await r.engine.runUntilIdle();
+
+    expect(r.sim.ordersOf(A).at(-1)).toMatchObject({ action: 'Sell', qty: 1 });
+    expect(r.sim.positionOf(A)).toBe(0);
+    expect((await r.engine.intents({ accountId: A })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'ACKED', qty: 1, sends: 1 });
+    expect(r.sim.ordersOf(B).at(-1)).toMatchObject({ action: 'Sell', qty: 3 });
+    expect(r.sim.positionOf(B)).toBe(0);
+    expect((await r.engine.intents({ accountId: B })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'ACKED', qty: 3, sends: 1 });
+    expect(r.sim.count('order/placeorder')).toBe(4);
+    expect((await r.engine.reconcile()).rows).toEqual([]);
+  });
+
+  test('(p) a reduction already waiting when the switch goes on is cut the same way', async () => {
+    const r = await setup({ accounts: 2, plan: [{ accountId: A, nth: 1, fault: { kind: 'partialFill', filled: 1 } }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [3] });
+    await r.engine.runUntilIdle();
+
+    r.sim.masterTrade({ action: 'Sell', fills: [3] });
+    await r.engine.settleFeed();
+    await r.engine.setKillSwitch(true);
+    await r.engine.runUntilIdle();
+
+    expect(r.sim.ordersOf(A).at(-1)).toMatchObject({ action: 'Sell', qty: 1 });
+    expect(r.sim.positionOf(A)).toBe(0);
+    expect(r.sim.ordersOf(B).at(-1)).toMatchObject({ action: 'Sell', qty: 3 });
+    expect(r.sim.positionOf(B)).toBe(0);
+    expect(r.sim.count('order/placeorder')).toBe(4);
+  });
+
+  test('(p) several reductions in one batch stop at flat: what is left after the real position is blocked', async () => {
+    const r = await setup({ accounts: 2, plan: [{ accountId: A, nth: 1, fault: { kind: 'partialFill', filled: 1 } }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [3] });
+    await r.engine.runUntilIdle();
+
+    await r.engine.setKillSwitch(true);
+    r.sim.masterTrade({ action: 'Sell', fills: [1, 1, 1] });
+    await r.engine.runUntilIdle();
+
+    expect(r.sim.ordersOf(A).slice(1).map((o) => [o.action, o.qty])).toEqual([['Sell', 1]]);
+    expect(r.sim.positionOf(A)).toBe(0);
+    expect((await r.engine.intents({ accountId: A })).map((i) => i.state)).toEqual(['ACKED', 'ACKED', 'BLOCKED', 'BLOCKED']);
+    expect(r.sim.ordersOf(B).slice(1).map((o) => [o.action, o.qty])).toEqual([['Sell', 1], ['Sell', 1], ['Sell', 1]]);
+    expect(r.sim.positionOf(B)).toBe(0);
+    expect(r.sim.count('order/placeorder')).toBe(6);
+    expect((await r.engine.reconcile()).rows).toEqual([]);
+  });
+
+  test('(p) switch on and the position cannot be read: nothing goes out, the reduction is blocked, an alert is raised', async () => {
+    const r = await setup({ accounts: 2, plan: [{ login: 'login-01', endpoint: 'position/list', nth: 1, fault: { kind: 'lostBeforeAccept', mode: 'http500' } }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [2] });
+    await r.engine.runUntilIdle();
+
+    await r.engine.setKillSwitch(true);
+    const [sell] = r.sim.masterTrade({ action: 'Sell', fills: [1] });
+    await r.engine.runUntilIdle();
+
+    expect(r.sim.count('order/placeorder')).toBe(2);
+    expect(r.sim.positionOf(A)).toBe(2);
+    expect(r.sim.positionOf(B)).toBe(2);
+    for (const id of [A, B]) {
+      expect((await r.engine.intents({ accountId: id })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'BLOCKED', detail: 'kill_switch_position_unread', sends: 0 });
+    }
+    expect((await r.engine.alerts()).map((a) => a.kind)).toEqual(['kill_switch_on', 'kill_switch_position_unread']);
   });
 });

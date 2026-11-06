@@ -110,7 +110,7 @@ deployment would use. Letters are test names in [`test/engine.test.ts`](test/eng
 | Feed stall or drop | Heartbeats, silence detection, reconnect with one sync per connection, then the fill list closes the gap | (m) |
 | A follower rejection | REJECTED after one send, an alert, and drift in the next reconcile. No retry loop | (n) |
 | A position nobody can explain | `closeout` reads `position/list` and sends exactly that, tagged and idempotent | (o) |
-| Stop now | The kill switch blocks entries, including those waiting to go. Closes and reductions still pass, and never cross zero | (p) |
+| Stop now | The kill switch blocks entries, including those waiting to go. Closes still pass. Reductions pass cut to the position `position/list` reports, so they stop at flat in the cases (p) pins: after a partial fill, already waiting when the switch goes on, several in one batch. If that position cannot be read, nothing is sent. With the switch off a reduction is sized from the master, so after a partial fill it can cross zero (holding +1, `Sell 3`, position -2), and the reconciler flags the drift (l) | (p), (l) |
 
 The reconciler reports by default. Auto-close is explicit config: `reconcile({ autoClose: true })`.
 
