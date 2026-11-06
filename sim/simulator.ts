@@ -202,6 +202,11 @@ export class Simulator {
     for (const conn of this.conns) conn.stalled = true;
   }
 
+  /** The server drops the feed connection abruptly. */
+  dropFeed(): void {
+    for (const conn of this.conns) conn.ws.terminate();
+  }
+
   /** Opens a session for a login as another client would, closing the oldest past two. */
   openSession(login: string): string {
     return this.createSession(this.logins.get(login)!).token;
@@ -248,6 +253,8 @@ export class Simulator {
 
     const entry: SimRequest = { at: this.clock.now(), endpoint, status: 0 };
     if (typeof body.accountId === 'number') entry.accountId = body.accountId;
+    const masterId = url.searchParams.get('masterid');
+    if (masterId) entry.accountId = Number(masterId);
     if (typeof body.clOrdId === 'string') entry.clOrdId = body.clOrdId;
     if (typeof body['p-ticket'] === 'string') entry.ticket = body['p-ticket'];
     this.requests.push(entry);
