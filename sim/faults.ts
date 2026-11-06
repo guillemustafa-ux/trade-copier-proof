@@ -21,7 +21,9 @@ export type Fault =
   /** A 200 with failureReason and no order, for example a locked account. */
   | { kind: 'reject'; reason: string }
   /** The order is accepted and fills only partly; the remainder stays Working. */
-  | { kind: 'partialFill'; filled: number };
+  | { kind: 'partialFill'; filled: number }
+  /** An empty answer with this status. Endpoints other than order/placeorder only. */
+  | { kind: 'status'; status: number };
 
 /**
  * One planned fault. It matches by account or by login and, with `nth`, only the n-th call of
@@ -32,7 +34,7 @@ export interface FaultRule {
   accountId?: number;
   login?: string;
   nth?: number;
-  /** Defaults to order/placeorder. For other endpoints only lostBeforeAccept and penalty apply. */
+  /** Defaults to order/placeorder. For other endpoints only lostBeforeAccept, penalty, captcha and status apply. */
   endpoint?: string;
   fault: Fault;
 }

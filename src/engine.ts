@@ -284,8 +284,9 @@ export class Engine {
     const ticket = planned.find((r) => r.p_ticket);
     const sending = await this.boundByPosition(login, ticket ? [ticket] : [...resend, ...planned], now);
     if (sending.length) {
-      await this.store.markSending(sending.map((r) => r.id));
-      const results = await Promise.all(sending.map(async (row) => ({ row, outcome: await this.send(row, token) })));
+      const marked = await this.store.markSending(sending.map((r) => r.id));
+      const going = sending.filter((r) => marked.has(r.id));
+      const results = await Promise.all(going.map(async (row) => ({ row, outcome: await this.send(row, token) })));
       await this.applyOutcomes(login, results, now);
       this.maybeCrash('mid_fanout', results.length);
     }
@@ -293,38 +294,73 @@ export class Engine {
   }
 
   /**
-   * With the kill switch on, a copy may only move the position the server reports toward flat, never
-   * past it: after a partial fill the engine believes it holds more than it does. If that position
-   * cannot be read, nothing goes out. With the switch off this returns the rows untouched.
+   * With the kill switch on, what goes out is limited by the position the server reports at send
+   * time: a reduction only moves it toward flat, never past it, because belief can be wrong after a
+   * partial fill. A send with no answer is not repeated, and a reduction on a pair with another
+   * unresolved order is blocked. Not covered: an ACKED order that has not filled yet is not in the
+   * read. With the switch off this returns the rows untouched.
    */
   private async boundByPosition(login: string, rows: IntentRow[], now: number): Promise<IntentRow[]> {
-    const copies = rows.filter((r) => r.kind === 'COPY');
-    if (!copies.length || (await this.store.setting('kill_switch')) !== 'on') return rows;
-    const held = await this.readPositions(login);
-    if (!held) {
-      await this.store.pool.query(`update intents set state = 'BLOCKED', due_at = null, detail = 'kill_switch_position_unread' where id = any($1::bigint[])`, [copies.map((r) => r.id)]);
-      await this.store.alert(now, login, 'kill_switch_position_unread', `${copies.length} reductions blocked: position/list could not be read`);
-      return rows.filter((r) => r.kind !== 'COPY');
+    if (!rows.length || (await this.store.setting('kill_switch')) !== 'on') return rows;
+    const unresolved = await this.store.unresolvedPairs(login);
+
+    for (const row of rows.filter((r) => r.state === 'UNKNOWN')) {
+      await this.store.blockIntents([row.id], 'kill_switch_no_resend');
+      await this.store.alert(now, login, 'kill_switch_no_resend', `${row.cl_ord_id}: no answer and not visible, so not re-sent with the switch on; closeout is the way out`);
     }
+    const fresh = rows.filter((r) => r.state !== 'UNKNOWN');
+    const copies = fresh.filter((r) => r.kind === 'COPY');
+    const others = fresh.filter((r) => r.kind !== 'COPY');
+    if (!copies.length) return others;
+
+    const { held, raw } = await this.fetchPositions(login);
+    if (!held) {
+      if (raw?.status === 423 || raw?.json?.['p-captcha']) await this.store.blockLogin(now, login, 'p_captcha', 'position/list answered p-captcha');
+      else if (raw?.json?.['p-ticket']) {
+        await this.store.setNotBefore(login, now + Number(raw.json['p-time'] ?? 0) * 1000);
+        return [];
+      }
+    }
+    if ((await this.store.login(login)).state !== 'ACTIVE') return [];
+    if (!held) {
+      await this.positionUnread(login, copies, raw, now);
+      return others;
+    }
+
+    // What a close in this batch will take comes off first, whatever the row order.
+    const sizeOf = (row: IntentRow) => (row.action === 'Buy' ? row.qty : -row.qty);
+    const keyOf = (row: IntentRow) => `${row.follower_account_id}:${row.contract_id}`;
+    for (const row of others) held.set(keyOf(row), (held.get(keyOf(row)) ?? 0) + sizeOf(row));
+
     const going: IntentRow[] = [];
-    for (const row of rows) {
-      if (row.kind !== 'COPY') {
-        going.push(row);
+    for (const row of copies) {
+      if (unresolved.has(keyOf(row))) {
+        await this.store.blockIntents([row.id], 'kill_switch_inflight');
         continue;
       }
-      const key = `${row.follower_account_id}:${row.contract_id}`;
-      const actual = held.get(key) ?? 0;
-      const sign = row.action === 'Buy' ? 1 : -1;
-      const allowed = Math.sign(actual) === -sign ? Math.min(row.qty, Math.abs(actual)) : 0;
+      const actual = held.get(keyOf(row)) ?? 0;
+      const allowed = Math.sign(actual) === -Math.sign(sizeOf(row)) ? Math.min(row.qty, Math.abs(actual)) : 0;
       if (allowed === 0) {
-        await this.store.pool.query(`update intents set state = 'BLOCKED', due_at = null, detail = 'kill_switch' where id = $1`, [row.id]);
+        await this.store.blockIntents([row.id], 'kill_switch');
         continue;
       }
       if (allowed < row.qty) await this.store.pool.query(`update intents set qty = $2, detail = $3 where id = $1`, [row.id, allowed, `kill_switch: cut from ${row.qty} to the position held`]);
-      held.set(key, actual + sign * allowed);
+      held.set(keyOf(row), actual + Math.sign(sizeOf(row)) * allowed);
       going.push({ ...row, qty: allowed });
     }
-    return going;
+    return [...others, ...going];
+  }
+
+  /** A failed read is retried like a failed lookup. Only when it keeps failing are the reductions blocked. */
+  private async positionUnread(login: string, copies: IntentRow[], raw: Raw | undefined, now: number): Promise<void> {
+    if (raw && (raw.status === 408 || raw.status === 401 || raw.status >= 500)) await this.store.setSuspect(login, true);
+    const spent = copies.filter((r) => r.lookup_failures + 1 >= MAX_LOOKUP_FAILURES).map((r) => r.id);
+    const retry = copies.filter((r) => r.lookup_failures + 1 < MAX_LOOKUP_FAILURES).map((r) => r.id);
+    if (retry.length) await this.store.pool.query('update intents set lookup_failures = lookup_failures + 1, due_at = $2 where id = any($1::bigint[])', [retry, now + LOOKUP_RETRY_MS]);
+    if (spent.length) {
+      await this.store.blockIntents(spent, 'kill_switch_position_unread');
+      await this.store.alert(now, login, 'kill_switch_position_unread', `${spent.length} reductions blocked: position/list failed ${MAX_LOOKUP_FAILURES} times`);
+    }
   }
 
   private async send(row: IntentRow, token: string): Promise<PlaceOutcome> {
@@ -481,17 +517,22 @@ export class Engine {
 
   /** `position/list` for a login as `account:contract` to net, or undefined when it cannot be read. */
   private async readPositions(login: string): Promise<Map<string, number> | undefined> {
+    return (await this.fetchPositions(login)).held;
+  }
+
+  /** The same read, keeping the raw answer of a failure so the caller can tell why it failed. */
+  private async fetchPositions(login: string): Promise<{ held?: Map<string, number>; raw?: Raw }> {
     const token = await this.sessions.ensure(login);
-    if (!token) return undefined;
+    if (!token) return {};
     const raw = await this.api.get('position/list', token);
     if (raw.status === 429) {
       await this.store.blockLogin(this.clock.now(), login, 'http_429', 'position/list answered 429');
-      return undefined;
+      return { raw };
     }
-    if (raw.status !== 200 || raw.json?.['p-ticket']) return undefined;
+    if (raw.status !== 200 || raw.json?.['p-ticket']) return { raw };
     const held = new Map<string, number>();
     for (const p of raw.json as Array<{ accountId: number; contractId: number; netPos: number }>) held.set(`${p.accountId}:${p.contractId}`, p.netPos);
-    return held;
+    return { held };
   }
 
   /** The same clOrdId on two orders: the server accepted a re-send of something it had already. */

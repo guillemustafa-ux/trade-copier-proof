@@ -2,12 +2,14 @@ diff --git a/src/engine.ts b/src/engine.ts
 index 0756d1d..f408425 100644
 --- a/src/engine.ts
 +++ b/src/engine.ts
-@@ -284,8 +284,8 @@ export class Engine {
+@@ -284,9 +284,8 @@ export class Engine {
      const ticket = planned.find((r) => r.p_ticket);
      const sending = await this.boundByPosition(login, ticket ? [ticket] : [...resend, ...planned], now);
      if (sending.length) {
--      await this.store.markSending(sending.map((r) => r.id));
-       const results = await Promise.all(sending.map(async (row) => ({ row, outcome: await this.send(row, token) })));
+-      const marked = await this.store.markSending(sending.map((r) => r.id));
+-      const going = sending.filter((r) => marked.has(r.id));
+-      const results = await Promise.all(going.map(async (row) => ({ row, outcome: await this.send(row, token) })));
++      const results = await Promise.all(sending.map(async (row) => ({ row, outcome: await this.send(row, token) })));
 +      await this.store.markSending(sending.map((r) => r.id));
        await this.applyOutcomes(login, results, now);
        this.maybeCrash('mid_fanout', results.length);

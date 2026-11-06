@@ -209,9 +209,23 @@ export class Store {
     return res.rows[0]?.t ?? null;
   }
 
-  /** Committed before any network call: a crash after this point leaves SENDING, never a silent send. */
-  async markSending(ids: number[]): Promise<void> {
-    await this.pool.query(`update intents set state = 'SENDING', sends = sends + 1 where id = any($1::bigint[])`, [ids]);
+  /**
+   * Committed before any network call: a crash after this point leaves SENDING, never a silent send.
+   * Only rows still waiting to go move, and only those may be sent: a stopped login blocks the rest.
+   */
+  async markSending(ids: number[]): Promise<Set<number>> {
+    const res = await this.pool.query<{ id: number }>(`update intents set state = 'SENDING', sends = sends + 1 where id = any($1::bigint[]) and state in ('PLANNED', 'UNKNOWN') returning id`, [ids]);
+    return new Set(res.rows.map((r) => r.id));
+  }
+
+  async blockIntents(ids: number[], detail: string): Promise<void> {
+    await this.pool.query(`update intents set state = 'BLOCKED', due_at = null, detail = $2 where id = any($1::bigint[])`, [ids, detail]);
+  }
+
+  /** `account:contract` of every intent whose send has no answer yet: it may still land. */
+  async unresolvedPairs(login: string): Promise<Set<string>> {
+    const res = await this.pool.query<{ follower_account_id: number; contract_id: number }>(`select follower_account_id, contract_id from intents where login_name = $1 and state in ('UNKNOWN', 'SENDING')`, [login]);
+    return new Set(res.rows.map((r) => `${r.follower_account_id}:${r.contract_id}`));
   }
 
   async intents(filter: { accountId?: number }): Promise<IntentRow[]> {

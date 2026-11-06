@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'vitest';
+import type { FaultRule } from '../sim/faults.js';
 import { CRASH_POINTS } from '../src/crash.js';
 import { killedBySigkill, rig, runEngineProcess, type Rig, type RigOptions } from './support/rig.js';
 
@@ -603,8 +604,8 @@ describe('rejection, closeout, kill switch', () => {
     expect((await r.engine.reconcile()).rows).toEqual([]);
   });
 
-  test('(p) switch on and the position cannot be read: nothing goes out, the reduction is blocked, an alert is raised', async () => {
-    const r = await setup({ accounts: 2, plan: [{ login: 'login-01', endpoint: 'position/list', nth: 1, fault: { kind: 'lostBeforeAccept', mode: 'http500' } }] });
+  test('(p) switch on and the position stays unreadable: 5 reads, nothing goes out, the reduction is blocked, an alert is raised', async () => {
+    const r = await setup({ accounts: 2, plan: [{ login: 'login-01', endpoint: 'position/list', fault: { kind: 'lostBeforeAccept', mode: 'http500' } }] });
     r.sim.masterTrade({ action: 'Buy', fills: [2] });
     await r.engine.runUntilIdle();
 
@@ -612,6 +613,7 @@ describe('rejection, closeout, kill switch', () => {
     const [sell] = r.sim.masterTrade({ action: 'Sell', fills: [1] });
     await r.engine.runUntilIdle();
 
+    expect(r.sim.count('position/list', 'login-01')).toBe(5);
     expect(r.sim.count('order/placeorder')).toBe(2);
     expect(r.sim.positionOf(A)).toBe(2);
     expect(r.sim.positionOf(B)).toBe(2);
@@ -619,5 +621,257 @@ describe('rejection, closeout, kill switch', () => {
       expect((await r.engine.intents({ accountId: id })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'BLOCKED', detail: 'kill_switch_position_unread', sends: 0 });
     }
     expect((await r.engine.alerts()).map((a) => a.kind)).toEqual(['kill_switch_on', 'kill_switch_position_unread']);
+    expect((await r.engine.loginHealth()).find((l) => l.name === 'login-01')).toMatchObject({ state: 'ACTIVE' });
+  });
+
+  test('(p) switch on and one read fails: the reduction waits and goes on the next read', async () => {
+    const r = await setup({ accounts: 2, plan: [{ login: 'login-01', endpoint: 'position/list', nth: 1, fault: { kind: 'lostBeforeAccept', mode: 'http500' } }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [2] });
+    await r.engine.runUntilIdle();
+
+    await r.engine.setKillSwitch(true);
+    const t0 = r.clock.now();
+    const [sell] = r.sim.masterTrade({ action: 'Sell', fills: [1] });
+    await r.engine.runUntilIdle();
+
+    expect(r.sim.count('position/list', 'login-01')).toBe(2);
+    expect(placed(r, A).at(-1)!.at).toBeGreaterThanOrEqual(t0 + 5_000);
+    expect(r.sim.positionOf(A)).toBe(1);
+    expect(r.sim.positionOf(B)).toBe(1);
+    expect((await r.engine.intents({ accountId: A })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'ACKED', sends: 1 });
+    expect((await r.engine.alerts()).map((a) => a.kind)).toEqual(['kill_switch_on']);
+  });
+
+  test.each([
+    ['423', { kind: 'status', status: 423 } as const],
+    ['p-captcha', { kind: 'captcha' } as const],
+  ])('(p) switch on and the read answers %s: the login stops, nothing is sent', async (_name, fault) => {
+    const r = await setup({ accounts: 2, plan: [{ login: 'login-01', endpoint: 'position/list', nth: 1, fault }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [2] });
+    await r.engine.runUntilIdle();
+
+    await r.engine.setKillSwitch(true);
+    const [sell] = r.sim.masterTrade({ action: 'Sell', fills: [1] });
+    await r.engine.runUntilIdle();
+
+    const after = r.sim.count(undefined, 'login-01');
+    await r.engine.runFor(2 * 3_600_000);
+    expect(r.sim.count(undefined, 'login-01')).toBe(after);
+    expect(r.sim.count('order/placeorder')).toBe(2);
+    expect(r.sim.positionOf(A)).toBe(2);
+    expect((await r.engine.loginHealth()).find((l) => l.name === 'login-01')).toMatchObject({ state: 'BLOCKED', blocked_reason: 'p_captcha' });
+    for (const id of [A, B]) {
+      expect((await r.engine.intents({ accountId: id })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'BLOCKED', detail: 'p_captcha', sends: 0 });
+    }
+    expect((await r.engine.alerts()).map((a) => a.kind)).toEqual(['kill_switch_on', 'p_captcha']);
+  });
+
+  test('(p) switch on and the read answers a p-ticket: nothing goes out, the rows stay PLANNED and retry after p-time', async () => {
+    const r = await setup({ accounts: 2, plan: [{ login: 'login-01', endpoint: 'position/list', nth: 1, fault: { kind: 'penalty', pTime: 15 } }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [2] });
+    await r.engine.runUntilIdle();
+    await r.engine.runFor(1_000);
+
+    await r.engine.setKillSwitch(true);
+    const t0 = r.clock.now();
+    const [sell] = r.sim.masterTrade({ action: 'Sell', fills: [1] });
+    await r.engine.settleFeed();
+    await r.engine.step();
+
+    expect(r.sim.count('order/placeorder')).toBe(2);
+    expect((await r.engine.intents({ accountId: A })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'PLANNED', sends: 0 });
+
+    await r.engine.runUntilIdle();
+    expect(r.sim.count('position/list', 'login-01')).toBe(2);
+    expect(placed(r, A).at(-1)!.at).toBe(t0 + 15_000);
+    expect(r.sim.positionOf(A)).toBe(1);
+    expect(r.sim.positionOf(B)).toBe(1);
+    expect((await r.engine.intents({ accountId: A })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'ACKED', sends: 1 });
+    expect((await r.engine.alerts()).map((a) => a.kind)).toEqual(['kill_switch_on']);
+  });
+
+  /** Runs `event` the next time the clock moves, so it lands while the engine waits for its pacing slot. */
+  const onNextHop = (r: Rig, event: () => void) => {
+    const advance = r.clock.advanceTo.bind(r.clock);
+    r.clock.advanceTo = async (t) => {
+      r.clock.advanceTo = advance;
+      event();
+      await advance(t);
+    };
+  };
+
+  /** Holds +3, believes +5: a close of 3 and a master Sell 1 end up due in the same batch. */
+  const closeAndReductionInOneBatch = async (extra: FaultRule[] = []) => {
+    const r = await setup({ accounts: 2, plan: [{ accountId: A, nth: 1, fault: { kind: 'partialFill', filled: 3 } }, ...extra] });
+    r.sim.masterTrade({ action: 'Buy', fills: [5] });
+    await r.engine.runUntilIdle();
+    await r.engine.setKillSwitch(true);
+    let sell: number[] = [];
+    onNextHop(r, () => {
+      sell = r.sim.masterTrade({ action: 'Sell', fills: [1] });
+    });
+    const close = await r.engine.closeout(A);
+    return { r, close, sell: sell[0]! };
+  };
+
+  test('(p) a close and a reduction in one batch: the close is counted first, so together they stop at flat', async () => {
+    const { r, close, sell } = await closeAndReductionInOneBatch();
+
+    expect(close).toMatchObject({ sent: true, qty: 3, action: 'Sell' });
+    expect(r.sim.ordersOf(A).slice(1).map((o) => [o.action, o.qty])).toEqual([['Sell', 3]]);
+    expect(r.sim.positionOf(A)).toBe(0);
+    expect((await r.engine.intents({ accountId: A })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'BLOCKED', detail: 'kill_switch', sends: 0 });
+    expect(r.sim.ordersOf(B).at(-1)).toMatchObject({ action: 'Sell', qty: 1 });
+    expect(r.sim.positionOf(B)).toBe(4);
+    expect(r.sim.count('order/placeorder')).toBe(4);
+  });
+
+  test('(p) the read answers 429 with a close in the batch: the login stopped, so the close does not go either', async () => {
+    const { r, sell } = await closeAndReductionInOneBatch([{ login: 'login-01', endpoint: 'position/list', nth: 2, fault: { kind: 'status', status: 429 } }]);
+
+    const after = r.sim.count(undefined, 'login-01');
+    await r.engine.runFor(2 * 3_600_000);
+    expect(r.sim.count(undefined, 'login-01')).toBe(after);
+    expect(r.sim.count('order/placeorder')).toBe(2);
+    expect(r.sim.positionOf(A)).toBe(3);
+    expect(r.sim.positionOf(B)).toBe(5);
+    expect((await r.engine.loginHealth()).find((l) => l.name === 'login-01')).toMatchObject({ state: 'BLOCKED', blocked_reason: 'http_429' });
+    expect((await intent(r, A, 'close-'))[0]).toMatchObject({ state: 'BLOCKED', detail: 'http_429', sends: 0 });
+    for (const id of [A, B]) {
+      expect((await r.engine.intents({ accountId: id })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'BLOCKED', detail: 'http_429', sends: 0 });
+    }
+    expect((await r.engine.alerts()).map((a) => a.kind)).toEqual(['kill_switch_on', 'http_429']);
+  });
+
+  test('(p) markSending moves only rows still waiting to go, and says which', async () => {
+    const r = await setup({ accounts: 1 });
+    r.sim.masterTrade({ action: 'Buy', fills: [1] });
+    await r.engine.settleFeed();
+    const [waiting] = await r.engine.intents({ accountId: A });
+    await r.engine.setKillSwitch(true);
+    const [blocked] = await r.engine.intents({ accountId: A });
+    expect(blocked).toMatchObject({ state: 'BLOCKED', sends: 0 });
+
+    expect(await r.engine.store.markSending([waiting!.id])).toEqual(new Set());
+    expect((await r.engine.intents({ accountId: A }))[0]).toMatchObject({ state: 'BLOCKED', sends: 0 });
+  });
+
+  test('(p) a reduction on a pair with an unresolved order is held back: the first order lands and it stops at flat', async () => {
+    const r = await setup({
+      accounts: 2,
+      plan: [
+        { accountId: A, nth: 1, fault: { kind: 'partialFill', filled: 1 } },
+        { accountId: A, nth: 2, fault: { kind: 'lostAfterAccept', visibleAfterMs: GRACE_MS - 10_000 } },
+      ],
+    });
+    r.sim.masterTrade({ action: 'Buy', fills: [3] });
+    await r.engine.runUntilIdle();
+    await r.engine.runFor(1_000);
+
+    await r.engine.setKillSwitch(true);
+    const [first] = r.sim.masterTrade({ action: 'Sell', fills: [1] });
+    await r.engine.settleFeed();
+    await r.engine.step();
+    expect((await r.engine.intents({ accountId: A })).find((i) => i.master_fill_id === first)).toMatchObject({ state: 'UNKNOWN', sends: 1 });
+
+    const [second] = r.sim.masterTrade({ action: 'Sell', fills: [1] });
+    await r.engine.runUntilIdle();
+
+    expect((await r.engine.intents({ accountId: A })).find((i) => i.master_fill_id === second)).toMatchObject({ state: 'BLOCKED', detail: 'kill_switch_inflight', sends: 0 });
+    expect((await r.engine.intents({ accountId: A })).find((i) => i.master_fill_id === first)).toMatchObject({ state: 'ACKED', adopted: true, sends: 1 });
+    expect(placed(r, A)).toHaveLength(2);
+    expect(r.sim.positionOf(A)).toBe(0);
+    expect(r.sim.positionOf(B)).toBe(1); // no unresolved order there: both reductions went
+    expect((await r.engine.alerts()).map((a) => a.kind)).toEqual(['kill_switch_on']);
+  });
+
+  test.each([
+    ['never accepted', { kind: 'lostBeforeAccept' } as const, 3, 1],
+    ['accepted, visible only after the grace window', { kind: 'lostAfterAccept', visibleAfterMs: GRACE_MS + 30_000 } as const, 2, 2],
+  ])('(p) switch on, a reduction with no answer and absent after the grace window (%s): not re-sent, blocked, alert, closeout flattens', async (_name, fault, positionAfter, ordersAfter) => {
+    const r = await setup({ accounts: 2, plan: [{ accountId: A, nth: 2, fault }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [3] });
+    await r.engine.runUntilIdle();
+
+    await r.engine.setKillSwitch(true);
+    const [sell] = r.sim.masterTrade({ action: 'Sell', fills: [1] });
+    await r.engine.runUntilIdle();
+    await r.engine.runFor(GRACE_MS + 30_000);
+
+    expect(placed(r, A)).toHaveLength(2);
+    expect(r.sim.ordersOf(A)).toHaveLength(ordersAfter);
+    expect(r.sim.positionOf(A)).toBe(positionAfter);
+    expect((await r.engine.intents({ accountId: A })).find((i) => i.master_fill_id === sell)).toMatchObject({ state: 'BLOCKED', detail: 'kill_switch_no_resend', sends: 1 });
+    expect((await r.engine.alerts()).map((a) => a.kind)).toEqual(['kill_switch_on', 'kill_switch_no_resend']);
+
+    expect(await r.engine.closeout(A)).toMatchObject({ sent: true, qty: positionAfter, action: 'Sell' });
+    expect(r.sim.positionOf(A)).toBe(0);
+  });
+
+  test('(p) switch on, a close with no answer and absent after the grace window: not re-sent, and a new closeout flattens', async () => {
+    const r = await setup({ accounts: 1, plan: [{ accountId: A, nth: 2, fault: { kind: 'lostBeforeAccept' } }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [2] });
+    await r.engine.runUntilIdle();
+    await r.engine.setKillSwitch(true);
+
+    expect(await r.engine.closeout(A)).toMatchObject({ sent: true, qty: 2, clOrdId: 'close-1001-3001-1' });
+    expect(placed(r, A)).toHaveLength(2);
+    expect(r.sim.positionOf(A)).toBe(2);
+    expect((await intent(r, A, 'close-'))[0]).toMatchObject({ state: 'BLOCKED', detail: 'kill_switch_no_resend', sends: 1 });
+    expect((await r.engine.alerts()).map((a) => a.kind)).toEqual(['kill_switch_on', 'kill_switch_no_resend']);
+
+    expect(await r.engine.closeout(A)).toMatchObject({ sent: true, qty: 2, clOrdId: 'close-1001-3001-2' });
+    expect(r.sim.positionOf(A)).toBe(0);
+  });
+
+  test('(p) not covered: an ACKED order that has not filled yet is not in the read, so a reduction can still cross zero', async () => {
+    const r = await setup({
+      accounts: 1,
+      plan: [
+        { accountId: A, nth: 1, fault: { kind: 'partialFill', filled: 1 } },
+        { accountId: A, nth: 2, fault: { kind: 'delayedVisibility', delayMs: 60_000 } },
+      ],
+    });
+    r.sim.masterTrade({ action: 'Buy', fills: [3] });
+    await r.engine.runUntilIdle();
+
+    await r.engine.setKillSwitch(true);
+    r.sim.masterTrade({ action: 'Sell', fills: [1] });
+    await r.engine.runUntilIdle();
+    r.sim.masterTrade({ action: 'Sell', fills: [1] });
+    await r.engine.runUntilIdle();
+    await r.engine.runFor(60_000);
+
+    expect(placed(r, A)).toHaveLength(3);
+    expect(r.sim.positionOf(A)).toBe(-1);
+    expect((await r.engine.reconcile()).rows).toMatchObject([{ accountId: A, expected: 1, actual: -1, drift: -2 }]);
+  });
+
+  test.each([
+    ['a 500', { kind: 'lostBeforeAccept', mode: 'http500' } as const],
+    ['a p-ticket', { kind: 'penalty', pTime: 15 } as const],
+  ])('(o) closeout when position/list answers %s: reported unreachable, nothing sent, the login still works and the next closeout flattens', async (_name, fault) => {
+    const r = await setup({ accounts: 1, plan: [{ login: 'login-01', endpoint: 'position/list', nth: 1, fault }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [2] });
+    await r.engine.runUntilIdle();
+
+    expect(await r.engine.closeout(A)).toMatchObject({ sent: false, qty: 0, unreachable: true });
+    expect(placed(r, A)).toHaveLength(1);
+    expect((await r.engine.loginHealth()).find((l) => l.name === 'login-01')).toMatchObject({ state: 'ACTIVE' });
+    expect(await r.engine.alerts()).toEqual([]);
+
+    expect(await r.engine.closeout(A)).toMatchObject({ sent: true, qty: 2, action: 'Sell' });
+    expect(r.sim.positionOf(A)).toBe(0);
+  });
+
+  test('(o) closeout when position/list answers 429: reported unreachable, nothing sent, the login stops', async () => {
+    const r = await setup({ accounts: 1, plan: [{ login: 'login-01', endpoint: 'position/list', nth: 1, fault: { kind: 'status', status: 429 } }] });
+    r.sim.masterTrade({ action: 'Buy', fills: [2] });
+    await r.engine.runUntilIdle();
+
+    expect(await r.engine.closeout(A)).toMatchObject({ sent: false, qty: 0, unreachable: true });
+    expect(placed(r, A)).toHaveLength(1);
+    expect((await r.engine.loginHealth()).find((l) => l.name === 'login-01')).toMatchObject({ state: 'BLOCKED', blocked_reason: 'http_429' });
+    expect((await r.engine.alerts()).map((a) => a.kind)).toEqual(['http_429']);
   });
 });

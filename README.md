@@ -115,9 +115,28 @@ deployment would use. Letters are test names in [`test/engine.test.ts`](test/eng
 | Feed stall or drop | Heartbeats, silence detection, reconnect with one sync per connection, then the fill list closes the gap | (m) |
 | A follower rejection | REJECTED after one send, an alert, and drift in the next reconcile. No retry loop | (n) |
 | A position nobody can explain | `closeout` reads `position/list` and sends exactly that, tagged and idempotent | (o) |
-| Stop now | The kill switch blocks entries, including those waiting to go. Closes still pass. Reductions pass cut to the position `position/list` reports, so they stop at flat in the cases (p) pins: after a partial fill, already waiting when the switch goes on, several in one batch. If that position cannot be read, nothing is sent. With the switch off a reduction is sized from the master, so after a partial fill it can cross zero (holding +1, `Sell 3`, position -2), and the reconciler flags the drift (l) | (p), (l) |
+| Stop now | The kill switch blocks entries, including those waiting to go. Closes still pass. A reduction is sized from the position read at send time, and held back while another order on that pair is unresolved. [What that covers](#what-the-kill-switch-covers) | (p), (l) |
 
 The reconciler reports by default. Auto-close is explicit config: `reconcile({ autoClose: true })`.
+
+### What the kill switch covers
+
+With the switch on, a reduction is cut to the `position/list` read at send time, after taking off any
+close in the same batch, and goes only toward flat. Test (p) pins that it stops at flat after a partial
+fill (holding +1, believing 3, `Sell 1`), when it was already waiting as the switch went on, with
+several in one batch, and next to a close.
+
+While another order on that pair is UNKNOWN or SENDING, a reduction is blocked
+(`kill_switch_inflight`). A send with no answer that stays absent after the grace window is not
+re-sent: it is blocked with an alert, and `closeout` is the way out. If the read answers 429, 423 or
+`p-captcha`, the login stops and nothing is sent. A `p-ticket` holds the batch until `p-time`. Other
+failures retry, and after 5 reads the reductions are blocked with an alert
+(`kill_switch_position_unread`).
+
+**Not covered:** an ACKED order that has not filled yet is not in the read, so a reduction can still
+cross zero, and test (p) pins that too. **With the switch off**, a reduction is sized from the master,
+not from the position, so after a partial fill it can cross zero (holding +1, `Sell 3`, position -2),
+and the reconciler flags the drift: test (l).
 
 ## The honest hole
 
