@@ -34,6 +34,8 @@ test('(q) the engine under the same seed: 3 duplicates, all flagged, and what it
     residualAccounts: 5,
     residualContracts: 10,
     residualOnStoppedLogins: 10,
+    wrongBreakdown: { stoppedLogins: 34, rejected: 10, other: 8 },
+    missedBreakdown: { stoppedLogins: 34, rejected: 10, other: 0 },
     stoppedLogins: ['login-03', 'login-04'],
     blockedIntents: 34,
     rejectedIntents: 50,

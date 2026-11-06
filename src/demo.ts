@@ -45,7 +45,7 @@ export interface DemoResult {
   options: { seed: number; logins: number; accounts: number };
   faults: Record<string, number>;
   naive: CopierNumbers;
-  engine: CopierNumbers & { stoppedLogins: string[]; residualOnStoppedLogins: number; blockedIntents: number; rejectedIntents: number; unknownIntents: number; flaggedDuplicates: number; alerts: Record<string, number> };
+  engine: CopierNumbers & { stoppedLogins: string[]; residualOnStoppedLogins: number; wrongBreakdown: { stoppedLogins: number; rejected: number; other: number }; missedBreakdown: { stoppedLogins: number; rejected: number; other: number }; blockedIntents: number; rejectedIntents: number; unknownIntents: number; flaggedDuplicates: number; alerts: Record<string, number> };
   report: string;
 }
 
@@ -77,6 +77,12 @@ function mulberry32(seed: number): () => number {
 /** Sizing: every tenth account trades double, every 25th is capped at one contract, every 40th is off. */
 export function demoSizing(accountId: number) {
   return { multiplier: accountId % 10 === 0 ? 2 : 1, maxContracts: accountId % 25 === 0 ? 1 : 100, enabled: accountId % 40 !== 0 };
+}
+
+/** What a follower should hold at the end of the scenario. */
+function demoExpected(accountId: number): number {
+  const s = demoSizing(accountId);
+  return s.enabled ? Math.min(s.maxContracts, Math.trunc(MASTER_NET_AT_END * s.multiplier)) : 0;
 }
 
 /** Faults by identity, so the same plan does the same thing however requests interleave. */
@@ -144,15 +150,11 @@ function measure(name: string, sim: Simulator, book: Book, closedBefore: Map<num
     else duplicatesLater++;
   }
   const perAccount = book.accounts.map((a) => copies.filter((o) => o.accountId === a.id).length);
-  const expectedNet = (id: number) => {
-    const s = demoSizing(id);
-    return s.enabled ? Math.min(s.maxContracts, Math.trunc(MASTER_NET_AT_END * s.multiplier)) : 0;
-  };
   let wrongAccounts = 0;
   let wrongContracts = 0;
   let missed = 0;
   for (const a of book.accounts) {
-    const d = Math.abs((closedBefore.get(a.id) ?? 0) - expectedNet(a.id));
+    const d = Math.abs((closedBefore.get(a.id) ?? 0) - demoExpected(a.id));
     if (d) {
       wrongAccounts++;
       wrongContracts += d;
@@ -236,12 +238,22 @@ export async function runEngine(options: { seed: number; logins: number; account
     const after = new Map(book.accounts.map((a) => [a.id, sim.positionOf(a.id)]));
     const numbers = measure('Engine', sim, book, before, after, /^tc-\d+-/, fillTimes);
     const residualOnStoppedLogins = book.accounts.filter((a) => stopped.includes(a.login)).reduce((sum, a) => sum + Math.abs(after.get(a.id) ?? 0), 0);
+    const rejected = new Set((await engine.intents({})).filter((i) => i.state === 'REJECTED').map((i) => Number(i.follower_account_id)));
+    const cause = (a: { id: number; login: string }) => (stopped.includes(a.login) ? 'stoppedLogins' : rejected.has(a.id) ? 'rejected' : 'other');
+    const wrongBreakdown = { stoppedLogins: 0, rejected: 0, other: 0 };
+    const missedBreakdown = { stoppedLogins: 0, rejected: 0, other: 0 };
+    for (const a of book.accounts) {
+      if ((before.get(a.id) ?? 0) !== demoExpected(a.id)) wrongBreakdown[cause(a)]++;
+      if (demoSizing(a.id).enabled && !sim.ordersOf(a.id).some((o) => o.clOrdId?.startsWith('tc-'))) missedBreakdown[cause(a)]++;
+    }
     const alerts: Record<string, number> = {};
     for (const alert of await engine.alerts()) alerts[alert.kind] = (alerts[alert.kind] ?? 0) + 1;
     return {
       ...numbers,
       stoppedLogins: stopped,
       residualOnStoppedLogins,
+      wrongBreakdown,
+      missedBreakdown,
       blockedIntents: counts.BLOCKED ?? 0,
       rejectedIntents: counts.REJECTED ?? 0,
       unknownIntents: counts.UNKNOWN ?? 0,
@@ -310,6 +322,8 @@ export function renderReport(r: Omit<DemoResult, 'report'>): string {
     '',
     `- Logins stopped and alerted, nothing sent on them afterwards: ${r.engine.stoppedLogins.length ? r.engine.stoppedLogins.join(', ') : 'none'}.`,
     `- Intents BLOCKED ${r.engine.blockedIntents}, REJECTED ${r.engine.rejectedIntents}, still UNKNOWN ${r.engine.unknownIntents}, at the end of the scenario.`,
+    `- Wrong positions by cause: ${r.engine.wrongBreakdown.stoppedLogins} on logins it stopped, ${r.engine.wrongBreakdown.rejected} on accounts the server rejected, ${r.engine.wrongBreakdown.other} others (partial follower fills and the duplicates below).`,
+    `- Missed copies by cause: ${r.engine.missedBreakdown.stoppedLogins} on logins it stopped, ${r.engine.missedBreakdown.rejected} on accounts the server rejected, ${r.engine.missedBreakdown.other} others.`,
     `- Duplicated clOrdIds flagged by the reconciler: ${r.engine.flaggedDuplicates}. These are the orders visible after the grace window, the limit the README states: the engine cannot see them in time, and a re-send follows.`,
     `- Alerts: ${Object.entries(r.engine.alerts).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k} ${v}`).join(', ') || 'none'}.`,
     `- Residual contracts on logins it stopped: ${r.engine.residualOnStoppedLogins} of ${r.engine.residualContracts}. It sends nothing there and says so; a person decides what happens next.`,
