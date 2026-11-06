@@ -16,6 +16,7 @@ Their index is <https://partner.ninjatrader.com/connect/llms.txt>.
 - "Applied per user (by user ID) across all endpoints"
 - "Applied per IPv4 /24 subnet or individual full IPv6 address for specific endpoints"
 - "Endpoint limits use a rolling one-hour window, not a fixed hourly reset."
+- Shared addresses: "you may share limits with them."
 - User-level table, Authenticated row: 5,000 per hour, 5,000 per minute, 5,000 per second.
 - Endpoint table, `Limit/Hour`, `Back-off (sec)`, `Requests Counted`:
   - `accesstokenrequest`: 5, 15, Failed only
@@ -118,6 +119,7 @@ Not on the parent's list. Needed because a fill carries `contractId` and `placeo
 - "This session is tracked, and you are limited to two concurrent sessions."
 - "Once a third (or additional) session is created, the oldest sessions are closed."
 - "Your oldest sessions will be closed, and subsequent calls using the old access tokens will throw 408, 429, or 500 level errors."
+- "Your API user should be a dedicated user that doesn't require more than two concurrent logins."
 - Renewal: "Extends the current session without creating a new one."
 - `renewAccessToken` sample: "if expiration is within 15 mins, renew"
 
@@ -185,6 +187,6 @@ Not verified here. No firm's rules were read for this repo.
 | Second sync on a connection | "exactly one" | `{"s":400}` on that request |
 | Penalty without a ticket | "must be included" | a new ticket with a longer `p-time` |
 | Renewed token | sample stores the renewal's `accessToken` | a new token string; the previous one stops working at once |
-| GET retried after a penalty | the ticket goes in the "JSON body" and a GET has none | the engine waits `p-time` and repeats the GET; `sim/` only issues penalties on `placeorder` |
+| GET retried after a penalty | the ticket goes in the "JSON body" and a GET has none | the engine waits `p-time` and repeats the GET; `sim/` issues penalties only where the fault plan puts them |
 | Early retries before a 429 | "eventually" | 3 early retries, then a 429 lockout |
 | 1,500 placements per hour | not in the official table | not enforced by `sim/`; configurable reading in `npm run capacity` |
