@@ -17,6 +17,7 @@ export interface CapacityInput {
 export interface Capacity extends CapacityInput {
   accountsPerLogin: number;
   renewalsPerHour: number;
+  renewalsPerHourOneLoginPerAccount: number;
   renewalBudgetPerHour: number;
   minEgressForRenewals: number;
   maxLoginsOnEgress: number;
@@ -42,6 +43,7 @@ export function capacity(input: CapacityInput): Capacity {
     ...input,
     accountsPerLogin,
     renewalsPerHour,
+    renewalsPerHourOneLoginPerAccount: (accounts * 60) / LIMITS.tokenLifeMinutes,
     renewalBudgetPerHour,
     minEgressForRenewals: Math.ceil(renewalsPerHour / LIMITS.renewPerHourPerSubnet),
     maxLoginsOnEgress: Math.floor((renewalBudgetPerHour * LIMITS.tokenLifeMinutes) / 60),
@@ -67,6 +69,8 @@ export function renderCapacity(c: Capacity): string {
     `  Token life ${LIMITS.tokenLifeMinutes} minutes [documented]; renewaccesstoken ${LIMITS.renewPerHourPerSubnet} per hour per /24, all requests count [documented].`,
     `  Needed: ${n(c.renewalsPerHour)} per hour even renewing at the last moment. Available: ${c.renewalBudgetPerHour} per hour. ${over ? 'OVER BUDGET.' : 'Fits.'}`,
     `  This egress holds at most ${c.maxLoginsOnEgress} logins. These logins need at least ${c.minEgressForRenewals} egress /24s.`,
+    `  This holds only if sessions are renewed. accesstokenrequest counts failed requests only [documented], so re-authenticating every ${LIMITS.tokenLifeMinutes} minutes costs 0 in the endpoint table, but it opens a session, and past two the oldest is closed [documented], which evicts what that user has open.`,
+    `  Accounts per login is unknown: with one login per prop account, ${c.accounts} logins need ${n(c.renewalsPerHourOneLoginPerAccount)} renewals per hour.`,
     '',
     'Reconnect waves',
     `  syncrequest ${LIMITS.syncPerHourPerSubnet} per hour per /24, all requests count [documented]; one sync per connection [documented].`,
@@ -83,7 +87,7 @@ export function renderCapacity(c: Capacity): string {
   ];
   if (c.firstLimit === 'renewals') {
     lines.push(
-      `  Logins and egress /24s, not accounts: ${c.logins} logins need ${n(c.renewalsPerHour)} renewals per hour against ${c.renewalBudgetPerHour}, with no trade placed and whatever the account count.`,
+      `  Logins and egress /24s, not accounts, as long as sessions are renewed: ${c.logins} logins need ${n(c.renewalsPerHour)} renewals per hour against ${c.renewalBudgetPerHour}, with no trade placed and whatever the account count.`,
       `  Implication: At least ${c.minEgressForRenewals} egress /24s for this many logins, with renewals spread across the hour. A bigger server changes nothing here; a second address in the same /24 does not either.`,
     );
   } else if (c.firstLimit === 'sync') {

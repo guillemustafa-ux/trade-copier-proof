@@ -26,7 +26,7 @@ It answers this ask, quoted from a job post:
 | "duplicate orders" | [the measured table](#what-the-demo-measured), [failure to mechanism](#failure-to-mechanism), and [what still duplicates](#the-honest-hole) |
 | "unclose-able" | `closeout` sizes from the position on the server, not from belief: test (o) |
 | "often freezes" | [what the cloud changes](#what-moving-to-the-cloud-changes-and-what-it-does-not), and a stop that survives: test (f). This repo makes no claim about why any particular copier freezes |
-| "1000+ accounts" | test (a) at 1,000 accounts over 50 logins, and [capacity](#capacity-what-sets-the-first-limit): logins and egress addresses bind before accounts do |
+| "1000+ accounts" | test (a) at 1,000 accounts over 50 logins, and [capacity](#capacity-what-sets-the-first-limit): as long as sessions are renewed, logins and egress addresses bind before accounts do |
 | "take a trade in Tradovate/ninja trader" | the master is read through Tradovate's user sync. A NinjaTrader-side master was not built |
 | "via prop firms" | [prop firm note](#prop-firm-note): rules differ per firm and are the trader's decision |
 
@@ -176,6 +176,8 @@ Session renewals
   Token life 80 minutes [documented]; renewaccesstoken 15 per hour per /24, all requests count [documented].
   Needed: 37.5 per hour even renewing at the last moment. Available: 15 per hour. OVER BUDGET.
   This egress holds at most 20 logins. These logins need at least 3 egress /24s.
+  This holds only if sessions are renewed. accesstokenrequest counts failed requests only [documented], so re-authenticating every 80 minutes costs 0 in the endpoint table, but it opens a session, and past two the oldest is closed [documented], which evicts what that user has open.
+  Accounts per login is unknown: with one login per prop account, 1000 logins need 750 renewals per hour.
 
 Reconnect waves
   syncrequest 300 per hour per /24, all requests count [documented]; one sync per connection [documented].
@@ -189,9 +191,14 @@ Placements per trade
     read per /24, as the official page keys penalty tickets: 1.5 trades per hour.
 ```
 
-**The arithmetic confirms it: logins and egress addresses bind first, not accounts.** Doubling the
-accounts to 2,000 leaves the renewal line at 37.5 per hour; doubling the logins moves it to 75. Test
-(s) pins these with literal numbers.
+**The arithmetic confirms it, as long as sessions are renewed: logins and egress addresses bind first,
+not accounts.** Doubling the accounts to 2,000 leaves the renewal line at 37.5 per hour; doubling the
+logins moves it to 75. Test (s) pins these with literal numbers.
+
+Re-authenticating every 80 minutes instead costs 0 in the endpoint table, because `accesstokenrequest`
+counts failed requests only, but it opens a session, and the two-session rule evicts what that user
+has open. Accounts per login is unknown: with one login per prop account, 600 logins need 450 renewals
+per hour, against 15 per `/24`.
 
 With enough `/24`s the limit moves to placements, and the number to manage is accounts per login: put
 all 1,000 accounts on one login and one trade costs 1,000 placements, which is 5 trades per hour on
