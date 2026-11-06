@@ -186,4 +186,5 @@ Not verified here. No firm's rules were read for this repo.
 | Penalty without a ticket | "must be included" | a new ticket with a longer `p-time` |
 | Renewed token | sample stores the renewal's `accessToken` | a new token string; the previous one stops working at once |
 | GET retried after a penalty | the ticket goes in the "JSON body" and a GET has none | the engine waits `p-time` and repeats the GET; `sim/` only issues penalties on `placeorder` |
+| Early retries before a 429 | "eventually" | 3 early retries, then a 429 lockout |
 | 1,500 placements per hour | not in the official table | not enforced by `sim/`; configurable reading in `npm run capacity` |
