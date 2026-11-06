@@ -248,7 +248,10 @@ describe('penalties', () => {
     r.sim.masterTrade({ action: 'Buy', fills: [1] });
     await r.engine.runUntilIdle();
 
+    // Its session, the order placed before the stop, and the one request that stopped it. Nothing else, ever.
     const after = r.sim.count(undefined, 'login-02');
+    expect(after).toBe(3);
+    expect(placed(r, stopped)).toHaveLength(1);
     await r.engine.runFor(2 * 3_600_000);
     await r.engine.reconcile();
     expect(r.sim.count(undefined, 'login-02')).toBe(after);
