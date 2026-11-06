@@ -1,0 +1,13 @@
+diff --git a/src/engine.ts b/src/engine.ts
+index 0756d1d..15905ec 100644
+--- a/src/engine.ts
++++ b/src/engine.ts
+@@ -342,7 +342,7 @@ export class Engine {
+             break;
+           case 'ambiguous':
+             // The order may exist. It is never re-sent from here: the resolver looks first.
+-            await c.query(`update intents set state = 'UNKNOWN', unknown_since = $2, due_at = $2, detail = $3 where id = $1`, [row.id, now, outcome.why]);
++            await c.query(`update intents set state = 'PLANNED', unknown_since = $2, due_at = $2, detail = $3 where id = $1`, [row.id, now, outcome.why]);
+             suspect = suspect || outcome.suspect;
+             break;
+         }

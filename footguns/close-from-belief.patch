@@ -1,0 +1,19 @@
+diff --git a/src/engine.ts b/src/engine.ts
+index 0756d1d..8094ee2 100644
+--- a/src/engine.ts
++++ b/src/engine.ts
+@@ -506,6 +506,14 @@ export class Engine {
+ 
+     for (const [login, list] of groupBy(accounts, (a) => a.login_name)) {
+       const held = await this.readPositions(login);
++      if (held) {
++        held.clear();
++        for (const i of await this.store.intents({})) {
++          if (i.login_name !== login || i.state !== 'ACKED') continue;
++          const key = `${i.follower_account_id}:${i.contract_id}`;
++          held.set(key, (held.get(key) ?? 0) + (i.action === 'Buy' ? i.qty : -i.qty));
++        }
++      }
+       const token = held ? await this.sessions.ensure(login) : null;
+       if (!held || !token) {
+         results.push(...list.map((a) => ({ accountId: Number(a.id), sent: false, qty: 0, unreachable: true })));

@@ -1,0 +1,21 @@
+diff --git a/src/engine.ts b/src/engine.ts
+index 0756d1d..2b4cc7d 100644
+--- a/src/engine.ts
++++ b/src/engine.ts
+@@ -165,7 +165,6 @@ export class Engine {
+ 
+   /** A fill has no accountId and no symbol: both come through its Order and its Contract. */
+   private async onMasterFill(fill: FeedFill): Promise<void> {
+-    if (await this.store.hasFill(fill.id)) return;
+     const master = this.opts.book.master;
+     const token = await this.sessions.ensure(master.login);
+     if (!token) return;
+@@ -206,7 +205,7 @@ export class Engine {
+     await this.store.tx(async (c) => {
+       const inserted = await c.query(
+         `insert into master_fills (fill_id, order_id, contract_id, symbol, action, qty, ingested_at)
+-         values ($1, $2, $3, $4, $5, $6, $7) on conflict (fill_id) do nothing returning fill_id`,
++         values ($1, $2, $3, $4, $5, $6, $7) on conflict (fill_id) do update set qty = excluded.qty returning fill_id`,
+         [fill.id, fill.orderId, fill.contractId, symbol, fill.action, fill.qty, now],
+       );
+       if (!inserted.rowCount) return; // this fill was already planned: a repeated frame stops here

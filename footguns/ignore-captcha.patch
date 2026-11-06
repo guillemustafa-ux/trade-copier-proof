@@ -1,0 +1,12 @@
+diff --git a/src/api.ts b/src/api.ts
+index d0f1eff..f223dcb 100644
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -64,7 +64,6 @@ export function classifyPlace(r: Raw): PlaceOutcome {
+   if (r.status !== 200) return { kind: 'rejected', reason: `http ${r.status}` };
+   // A penalty comes back as a 200: "the request was not handled". Always read the body first.
+   if (r.json?.['p-ticket']) {
+-    if (r.json['p-captcha']) return { kind: 'captcha' };
+     return { kind: 'penalty', ticket: r.json['p-ticket'], waitMs: Number(r.json['p-time'] ?? 0) * 1000 };
+   }
+   const reason = r.json?.failureReason;

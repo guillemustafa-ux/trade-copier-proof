@@ -1,0 +1,60 @@
+{
+  "blind-retry-on-timeout": {
+    "description": "An ambiguous send goes straight back to PLANNED: re-sent at once, with no lookup and no limit.",
+    "expectedFailures": [
+      "(c) response lost after accept (reset)",
+      "(c) response lost after accept (timeout)",
+      "(c) response lost after accept (http500)",
+      "(c) response lost after accept, order visible only inside the grace window",
+      "(d) response lost before accept",
+      "(d) a re-send that is also lost",
+      "(o) a closeout whose response is lost",
+      "(q) the engine under the same seed"
+    ]
+  },
+  "treat-200-as-placed": {
+    "description": "Any 200 counts as a placed order, so a p-ticket, p-captcha or rejection body is recorded as ACKED.",
+    "expectedFailures": [
+      "(g) penalty in a 200 body",
+      "(h) p-captcha",
+      "(n) follower rejection",
+      "(q) the engine under the same seed",
+      "(t) dashboard JSON"
+    ]
+  },
+  "intent-after-send": {
+    "description": "SENDING is committed after the network call instead of before it, so a crash in between leaves PLANNED and the restart re-sends.",
+    "expectedFailures": [
+      "(f) process killed at after_send_before_ack",
+      "(f) process killed at after_ack_before_commit"
+    ]
+  },
+  "no-grace-window": {
+    "description": "One empty lookup is enough to re-send: no grace window for an order that is slow to appear.",
+    "expectedFailures": [
+      "(c) response lost after accept, order visible only inside the grace window",
+      "(d) response lost before accept",
+      "(q) the engine under the same seed"
+    ]
+  },
+  "ignore-captcha": {
+    "description": "p-captcha is read as an ordinary penalty: the login waits p-time and tries again, instead of stopping.",
+    "expectedFailures": ["(h) p-captcha"]
+  },
+  "feed-no-dedupe": {
+    "description": "A repeated fill is ingested again. The unique intent key still stops a second order, but the master position is counted twice, so the expected positions are wrong.",
+    "expectedFailures": [
+      "(b) duplicate and out-of-order master frames",
+      "(m) master feed stall and reconnect"
+    ]
+  },
+  "close-from-belief": {
+    "description": "closeout sizes the order from the intents it believes went out, not from the position on the server.",
+    "expectedFailures": [
+      "(e) order appears after the grace window",
+      "(e) auto-close is explicit config",
+      "(o) a pre-existing duplicate position",
+      "(q) the engine under the same seed"
+    ]
+  }
+}

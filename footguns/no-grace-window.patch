@@ -1,0 +1,13 @@
+diff --git a/src/engine.ts b/src/engine.ts
+index 0756d1d..11f284d 100644
+--- a/src/engine.ts
++++ b/src/engine.ts
+@@ -365,7 +365,7 @@ export class Engine {
+       await this.store.pool.query(`update intents set state = 'ACKED', adopted = true, order_id = $2, acked_at = $3, due_at = null where id = $1`, [row.id, found.id, now]);
+       return undefined;
+     }
+-    const graceEnds = (row.unknown_since ?? now) + this.graceMs;
++    const graceEnds = now;
+     if (now < graceEnds) {
+       await this.store.pool.query('update intents set due_at = $2 where id = $1', [row.id, graceEnds]);
+       return undefined;
