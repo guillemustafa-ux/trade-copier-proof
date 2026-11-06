@@ -190,3 +190,7 @@ Not verified here. No firm's rules were read for this repo.
 | GET retried after a penalty | the ticket goes in the "JSON body" and a GET has none | the engine waits `p-time` and repeats the GET; `sim/` issues penalties only where the fault plan puts them |
 | Early retries before a 429 | "eventually" | 3 early retries, then a 429 lockout |
 | 1,500 placements per hour | not in the official table | not enforced by `sim/`; configurable reading in `npm run capacity` |
+| Penalty scope | "Is keyed to your IP's /24 subnet, not to your user or API key" | per login: a ticket, p-captcha or 423 affects only the login that received it. Lenient, not the worst case |
+
+The penalty scope row is the one exception to this section's heading: the docs are not silent there,
+and `sim/` takes the lenient reading. The engine does not model egress at all.

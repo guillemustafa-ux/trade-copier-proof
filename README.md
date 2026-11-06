@@ -98,7 +98,10 @@ grace windows, feed stalls and a fixed 20-99 ms per order. No network was measur
 ## Failure to mechanism
 
 Each row is proven against the simulator over real sockets, through the same entry points a
-deployment would use. Letters are test names in [`test/engine.test.ts`](test/engine.test.ts).
+deployment would use. Letters are test names: (a)-(p) in [`test/engine.test.ts`](test/engine.test.ts),
+(q) and (r) in [`test/demo.test.ts`](test/demo.test.ts), (s) in
+[`test/capacity.test.ts`](test/capacity.test.ts), (t) in
+[`test/dashboard.test.ts`](test/dashboard.test.ts).
 
 | Failure | What the engine does | Test |
 | --- | --- | --- |
@@ -106,9 +109,9 @@ deployment would use. Letters are test names in [`test/engine.test.ts`](test/eng
 | Timeout, reset or 5xx on a send | The intent becomes UNKNOWN and is never re-sent blind. It lists that account's orders and matches `clOrdId`: found means adopt | (c) |
 | The order is not there yet | Waits the grace window (30 s by default), looks again, and only then re-sends, once | (d) |
 | The re-send is lost too | Stays UNKNOWN and alerts. There is no third send | (d) |
-| The process is killed at any of four named points | The intent row commits before the network call. On restart, what was in flight goes through the same lookup | (f), real child process killed with SIGKILL |
+| The process is killed at any of four named points | The intent row commits before the network call. On restart, what was in flight goes through the same lookup. `after_send_before_ack` kills after the response has been received, before it is read, so no point kills with a request still on the wire | (f), real child process killed with SIGKILL |
 | A 200 body carrying `p-ticket` | Not a placed order. Waits `p-time`, then re-sends the identical body with the ticket | (g) |
-| `p-captcha`, or HTTP 429 | That login stops: its intents become BLOCKED, an alert is raised, no further request goes to it. Other logins finish | (h), (i) |
+| `p-captcha`, or HTTP 429 | That login stops: its intents become BLOCKED, an alert is raised, no further request goes to it. The other logins finish in the simulator, which keys penalties per login; the official page keys `p-ticket` and `p-captcha` to the IP `/24`, so logins sharing that egress would be penalised too. Not modeled. 429 is documented per user. | (h), (i) |
 | A third session evicts the engine's | `auth/me` detects it and the session is replaced. The failed send still goes through the lookup. A 429 here reads as a lockout and is treated as one | (j) |
 | A token nearing 80 minutes | Renewed 15 minutes before expiry in the same session. A penalty on the renewal waits rather than opening a session | (k) |
 | Partial master fills | 0.5 of 3, 6 and 10 is 1, 3, 5: per-fill rounding would give 4 | (l) |
@@ -148,9 +151,11 @@ not say `clOrdId` is unique, and the simulator does not enforce it.** So:
 3. The engine looks twice, finds nothing, and re-sends once, as it must or the copy would be missed.
 4. The first order appears. There are now two.
 
-Test (e) runs exactly this and asserts the duplicate is real. What the engine does is contain it: the
-reconciler flags the two orders on the same `clOrdId`, and `closeout` removes the excess. A longer
-grace window makes the hole smaller and every lost-before-accept copy later; it does not close it.
+Test (e) runs exactly this and asserts the duplicate is real. What the engine does is contain it: when
+the position drifts, the reconciler flags the two orders on the same `clOrdId`, and `closeout` removes
+the excess. A duplicate masked by a later rejection leaves the position where it should be, and it is
+not flagged: test (e) pins that too. A longer grace window makes the hole smaller and every
+lost-before-accept copy later; it does not close it.
 Whether a real server can stay silent that long is **not verified**: it is the worst behaviour the
 docs do not rule out.
 
@@ -249,6 +254,9 @@ without a crash, that ordering bug is invisible.
 - **The simulator is built from the docs and fills their silences with assumptions.** Each one is
   labelled `modeled assumption` in [docs/sources.md](docs/sources.md). A real server can behave
   differently, including better.
+- **Penalties are modeled per login, the lenient reading:** the official page keys `p-ticket` and
+  `p-captcha` to the IP `/24`, so logins sharing that egress would be penalised too, and egress is not
+  modeled.
 - **Latency is simulated.** It says nothing about real round trips.
 - **`clOrdId` uniqueness is undocumented**, and the order placement limit is not in the official
   table. The 1,500 figure is vendor-reported and not verified.
