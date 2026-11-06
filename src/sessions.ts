@@ -9,6 +9,8 @@ import type { Store } from './store.js';
  * resolver like any other, so eviction never turns into a blind re-send.
  */
 export class Sessions {
+  private readonly renewHold = new Map<string, number>();
+
   constructor(
     private readonly store: Store,
     private readonly api: Api,
@@ -33,9 +35,16 @@ export class Sessions {
       return this.replace(name, `auth/me answered ${me.status || me.network}`);
     }
 
-    if (this.clock.now() >= (login.token_expires_at ?? 0) - this.renewMarginMs) {
+    const now = this.clock.now();
+    if (now >= (login.token_expires_at ?? 0) - this.renewMarginMs && now >= (this.renewHold.get(name) ?? 0)) {
       const renewed = await this.api.get('auth/renewaccesstoken', token);
       if (renewed.status === 429) return this.stop(name, 'http_429', 'renewaccesstoken answered 429');
+      if (renewed.json?.['p-captcha']) return this.stop(name, 'p_captcha', 'renewaccesstoken answered p-captcha');
+      if (renewed.json?.['p-ticket']) {
+        // Renewals are the first limit a large fleet meets. The token still works: wait, do not open a session.
+        this.renewHold.set(name, now + Number(renewed.json['p-time'] ?? 0) * 1000);
+        return token;
+      }
       if (renewed.status === 200 && renewed.json?.accessToken) {
         await this.store.storeToken(name, renewed.json.accessToken, Date.parse(renewed.json.expirationTime), 'renewal');
         return renewed.json.accessToken as string;

@@ -287,6 +287,7 @@ export class Simulator {
     if (endpoint === 'order/placeorder') return this.placeOrder(login, session, body, res);
     const rule = this.matchRule(endpoint, login, Number(url.searchParams.get('masterid')) || undefined);
     if (rule?.fault.kind === 'lostBeforeAccept') return this.lose(res, rule.fault.mode);
+    if (rule?.fault.kind === 'penalty') return this.json(res, 200, this.ticketBody(`sim-ticket-${this.seq++}`, rule.fault.pTime));
 
     const mine = (accountId: number) => login.accountIds.has(accountId);
     const visible = this.orders.filter((o) => o.applied && mine(o.accountId));

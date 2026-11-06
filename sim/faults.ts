@@ -32,7 +32,7 @@ export interface FaultRule {
   accountId?: number;
   login?: string;
   nth?: number;
-  /** Defaults to order/placeorder. For other endpoints only lostBeforeAccept applies. */
+  /** Defaults to order/placeorder. For other endpoints only lostBeforeAccept and penalty apply. */
   endpoint?: string;
   fault: Fault;
 }

@@ -316,6 +316,19 @@ describe('sessions', () => {
     expect(await r.engine.alerts()).toEqual([]);
   });
 
+  test('(k) a penalty on the renewal: waits p-time and renews, no new session', async () => {
+    const r = await setup({ accounts: 1, plan: [{ login: 'login-01', endpoint: 'auth/renewaccesstoken', nth: 1, fault: { kind: 'penalty', pTime: 15 } }] });
+    await r.engine.runFor(66 * 60_000);
+
+    const renewals = r.sim.requests.filter((q) => q.endpoint === 'auth/renewaccesstoken' && q.login === 'login-01');
+    expect(renewals).toHaveLength(2);
+    expect(renewals[1]!.at - renewals[0]!.at).toBeGreaterThanOrEqual(15_000);
+    expect(r.sim.count('auth/accesstokenrequest')).toBe(2);
+    expect(r.sim.sessions('login-01')).toBe(1);
+    expect((await r.engine.loginHealth()).find((l) => l.name === 'login-01')).toMatchObject({ state: 'ACTIVE', renewals: 1, reauths: 0 });
+    expect(await r.engine.alerts()).toEqual([]);
+  });
+
   test('(k) token expired during fan-out: no duplicate, re-auth recorded', async () => {
     const r = await setup({ accounts: 3, plan: [{ accountId: B, nth: 1, fault: { kind: 'expireToken' } }], config: { concurrency: 1 } });
     r.sim.masterTrade({ action: 'Buy', fills: [1] });
